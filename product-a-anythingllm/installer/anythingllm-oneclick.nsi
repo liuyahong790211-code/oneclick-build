@@ -377,8 +377,9 @@ Section "写入模式配置" SecModeConfig
   ${EndIf}
 
   ; 二次校验：mode.json 真实存在且 mode 字段与用户选择一致（防静默写坏）。
-  ; 路径/mode 经 sys.argv 传递，避免 NSIS 引号嵌套转义。
-  nsExec::ExecToLog '"$INSTDIR\python\python.exe" -c "import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8')); sys.exit(0 if d.get('mode')==sys.argv[2] else 3)" "$INSTDIR\config\mode.json" "$SelectedMode"'
+  ; 实现为独立脚本 check_mode.py：内联 python -c 的单引号会与 NSIS 字符串
+  ; 定界符冲突导致 makensis "unterminated string"（2026-10-12 首构建实证）。
+  nsExec::ExecToLog '"$INSTDIR\python\python.exe" "$INSTDIR\preconfig\check_mode.py" "$INSTDIR\config\mode.json" "$SelectedMode"'
   Pop $0
   ${If} $0 != 0
     DetailPrint "mode.json 内容校验失败（退出码 $0）。"

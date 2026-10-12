@@ -150,9 +150,19 @@ jobs:
           # 1. 便携 Python：python-build-standalone（自带 pip，开箱即用）
           #    来源：https://github.com/astral-sh/python-build-standalone
           Write-Host "下载 python-build-standalone（cpython 3.12，windows amd64，install_only）..."
-          gh release download --repo astral-sh/python-build-standalone `
-            --pattern "cpython-3.12.*x86_64-pc-windows-msvc-install_only.tar.gz" `
-            --dir "$env:RUNNER_TEMP/pbs"
+          # gh release download 偶发失败（2026-10-12 首构建第 2 轮实证：26 秒挂，
+          # 目录未建导致后继 Get-ChildItem 报"找不到路径"盖住真因），加 3 次重试
+          # 与显式退出码检查
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/pbs" | Out-Null
+          $dlOk = $false
+          for ($i = 1; $i -le 3 -and -not $dlOk; $i++) {
+            Write-Host "下载 python-build-standalone（第 $i/3 次）..."
+            gh release download --repo astral-sh/python-build-standalone `
+              --pattern "cpython-3.12.*x86_64-pc-windows-msvc-install_only.tar.gz" `
+              --dir "$env:RUNNER_TEMP/pbs"
+            if ($LASTEXITCODE -eq 0) { $dlOk = $true } else { Start-Sleep -Seconds 10 }
+          }
+          if (-not $dlOk) { throw "gh release download 失败（3 次重试耗尽）" }
           $pbs = Get-ChildItem "$env:RUNNER_TEMP/pbs/*.tar.gz"
           if ($pbs.Count -ne 1) { throw "python-build-standalone 匹配到 $($pbs.Count) 个文件，预期 1 个（上游改名请检查）" }
           tar -xzf $pbs[0].FullName -C "$env:RUNNER_TEMP/pbs"
