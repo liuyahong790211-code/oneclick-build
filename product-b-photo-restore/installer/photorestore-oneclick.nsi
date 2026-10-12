@@ -8,14 +8,17 @@
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 
+; 2026-10-12 真机联调：不加此行中文全乱码（标题/进度/完成页/快捷方式名）
+Unicode true
+
 !define PRODUCT_NAME "老片修复一键包"
-!define PRODUCT_VERSION "1.0.0"
+!define PRODUCT_VERSION "1.0.1"
 !define PRODUCT_PUBLISHER "开源改装铺"
 !define INSTALL_DIR_NAME "PhotoRestore"
 
 ; ---- staging 目录约定（Phase 4 构建工作流在编译前备齐，相对本脚本路径） ----
 ; staging/
-;   app/          core/*.py gui/*.py（本产品源码）+ version.json（构建机写入 torch_version 等）
+;   app/          core/ + gui/ 子目录（本产品源码，子目录结构不可拍扁）+ version.json（构建机写入 torch_version 等）
 ;   models/       pytorch_model.pt（64MB，ModelScope damo/cv_rrdb_image-super-resolution，
 ;                 验证报告建议内置进安装包，省去用户端下载失败风险）
 ;   ffmpeg/       ffmpeg.exe + ffprobe.exe（gyan.dev Windows essentials 构建，

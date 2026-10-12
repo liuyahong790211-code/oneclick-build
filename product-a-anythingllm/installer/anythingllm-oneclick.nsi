@@ -31,13 +31,16 @@ SetCompressor /SOLID lzma
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
+
+; 2026-10-12 真机联调：不加此行中文全乱码（标题/进度/完成页/快捷方式名）
+Unicode true
 !include "FileFunc.nsh"
 !include "x64.nsh"
 
 ; ---------------- 版本与路径（构建时由 Phase 4 工作流替换/确认） ----------------
 !define PRODUCT_NAME "AnythingLLM 本地知识库问答一键包"
 !define PRODUCT_PUBLISHER "开源改装铺"
-!define PRODUCT_VERSION "1.0.0"
+!define PRODUCT_VERSION "1.0.1"
 !define OLLAMA_SETUP_EXE "vendor\OllamaSetup.exe"
 !define ANYTHINGLLM_SETUP_EXE "vendor\AnythingLLMDesktop.exe"
 !define EMBED_PYTHON_ZIP "vendor\python-embed-amd64.zip"

@@ -204,8 +204,11 @@ jobs:
           if ((Get-Item "$stg/models/pytorch_model.pt").Length -lt 50MB) { throw "pytorch_model.pt 体积异常（<50MB）" }
 
           # 5. 组装 staging/app（源码）与 staging/launcher（启动器）
-          Copy-Item "product-b-photo-restore/core/*" "$stg/app/" -Recurse -Force
-          Copy-Item "product-b-photo-restore/gui/*" "$stg/app/" -Recurse -Force
+          # 注意：必须保留 core/、gui/ 子目录结构（start.pyw 用 from gui.app / from core.xxx 导入）；
+          # 2026-10-12 真机联调：此前 "core/*" 写法把两包拍扁到 app/ 根目录，导致 ModuleNotFoundError: No module named 'gui'
+          New-Item -ItemType Directory -Force "$stg/app/core", "$stg/app/gui" | Out-Null
+          Copy-Item "product-b-photo-restore/core/*" "$stg/app/core/" -Recurse -Force
+          Copy-Item "product-b-photo-restore/gui/*" "$stg/app/gui/" -Recurse -Force
           @{ torch_version = $torchVer; python = "cpython-3.12 (python-build-standalone)";
              weight = "damo/cv_rrdb_image-super-resolution pytorch_model.pt";
              built = (Get-Date -Format "yyyy-MM-dd") } |
