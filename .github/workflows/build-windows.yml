@@ -63,17 +63,31 @@ jobs:
             -OutFile "$bin/AnythingLLMDesktop.exe"
           if ((Get-Item "$bin/AnythingLLMDesktop.exe").Length -lt 300MB) { throw "AnythingLLMDesktop.exe 体积异常（<300MB）" }
 
-          # 3. 内嵌 Python：从 python.org ftp 目录实时解析最新的 3.12.x（不硬编码小版本）
-          Write-Host "解析 python.org 最新 3.12.x ..."
+          # 3. 内嵌 Python：从 python.org ftp 目录解析 3.12.x 版本列表，
+          #    从最新往旧逐个尝试 embed 包（实测 2026-10-12：3.12.11+ 的
+          #    embed-amd64.zip 在 python.org 上 404，只有更早版本有包；
+          #    只认"最新版"会在此挂掉，故加回退循环，不硬编码任一版本）
+          Write-Host "解析 python.org 3.12.x 版本列表 ..."
           $listing = (Invoke-WebRequest -Uri "https://www.python.org/ftp/python/" -UseBasicParsing).Content
-          $pyver = ([regex]::Matches($listing, 'href="(3\.12\.\d+)/"') |
+          $versions = ([regex]::Matches($listing, 'href="(3\.12\.\d+)/"') |
             ForEach-Object { $_.Groups[1].Value } |
-            Sort-Object { [version]$_ } | Select-Object -Last 1)
-          if (-not $pyver) { throw "无法从 python.org 解析 3.12.x 版本号" }
+            Sort-Object { [version]$_ } -Descending | Select-Object -Unique)
+          if (-not $versions) { throw "无法从 python.org 解析 3.12.x 版本号" }
+          $pyver = $null
+          foreach ($v in $versions) {
+            Write-Host "尝试内嵌 Python $v ..."
+            try {
+              Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$v/python-$v-embed-amd64.zip" `
+                -OutFile "$bin/python-embed-amd64.zip" -ErrorAction Stop
+              if ((Get-Item "$bin/python-embed-amd64.zip").Length -lt 5MB) { throw "体积异常（<5MB）" }
+              $pyver = $v
+              break
+            } catch {
+              Write-Host "  $v 的 embed 包不可用，试更早版本 ..."
+            }
+          }
+          if (-not $pyver) { throw "所有 3.12.x 版本的 embed 包均下载失败" }
           Write-Host "使用内嵌 Python $pyver"
-          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/$pyver/python-$pyver-embed-amd64.zip" `
-            -OutFile "$bin/python-embed-amd64.zip"
-          if ((Get-Item "$bin/python-embed-amd64.zip").Length -lt 5MB) { throw "python embed zip 体积异常（<5MB）" }
           # 记录实际版本，供排查
           "python_embed=$pyver" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Append -Encoding utf8
 
