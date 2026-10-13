@@ -56,9 +56,12 @@ def ensure_gpu_torch(install_dir, python_exe, gpu_info=None, dry_run=False):
     if torch_has_cuda():
         return 'ok', '当前 torch 已支持 CUDA，无需补装'
     ver = read_bundled_torch_version(install_dir)
-    cmd = [python_exe, '-m', 'pip', 'install', f'torch=={ver}',
-           '--index-url', TSINGHUA_PYPI,
-           '--extra-index-url', 'https://download.pytorch.org/whl/cu128',
+    # v1.0.4: ver 形如 2.9.1+cpu，直接 pip install torch==2.9.1+cpu 会被判定
+    # "已满足要求"而跳过安装（2026-10-13 真机实证）。必须换成 +cu128 才能真装上。
+    cu_ver = ver.split('+')[0] + '+cu128'
+    cmd = [python_exe, '-m', 'pip', 'install', f'torch=={cu_ver}',
+           '--index-url', 'https://download.pytorch.org/whl/cu128',
+           '--extra-index-url', TSINGHUA_PYPI,
            '--no-cache-dir']
     # 注：CUDA wheel 本体仍走 pytorch 官方 CDN（国内直连 download.pytorch.org
     # 在 spike 曾卡死重试；「需验证」：若 Actions/用户侧不可达，改走

@@ -38,7 +38,7 @@ SetCompressor /SOLID lzma
 ; ---------------- 版本与路径（构建时由 Phase 4 工作流替换/确认） ----------------
 !define PRODUCT_NAME "AnythingLLM 本地知识库问答一键包"
 !define PRODUCT_PUBLISHER "开源改装铺"
-!define PRODUCT_VERSION "1.0.3"
+!define PRODUCT_VERSION "1.0.4"
 !define OLLAMA_SETUP_EXE "vendor\OllamaSetup.exe"
 !define ANYTHINGLLM_SETUP_EXE "vendor\AnythingLLMDesktop.exe"
 !define EMBED_PYTHON_ZIP "vendor\python-embed-amd64.zip"
