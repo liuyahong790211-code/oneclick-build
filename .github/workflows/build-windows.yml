@@ -177,8 +177,8 @@ jobs:
           Write-Host "下载 torch CPU wheel（含依赖闭包）..."
           & "$stg/python/python.exe" -m pip download torch --only-binary=:all: `
             --dest "$stg/wheels" --index-url "https://download.pytorch.org/whl/cpu"
-          Write-Host "下载 pillow + numpy（清华镜像）..."
-          & "$stg/python/python.exe" -m pip download pillow numpy --only-binary=:all: `
+          Write-Host "下载 pillow + numpy + tkinterdnd2（清华镜像；v1.0.5 拖拽功能）..."
+          & "$stg/python/python.exe" -m pip download pillow numpy tkinterdnd2 --only-binary=:all: `
             --dest "$stg/wheels" --index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
           $torchWheel = Get-ChildItem "$stg/wheels/torch-*.whl" | Select-Object -First 1
           if (-not $torchWheel) { throw "wheels/ 下没有 torch wheel" }

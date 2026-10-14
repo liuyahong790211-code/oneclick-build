@@ -88,6 +88,35 @@ class RRDBNet(nn.Module):
 
 SCALE = 4  # x4plus 固定 4 倍放大
 
+# v1.0.5 自适应倍数：输出长边封顶，避免大图无脑 x4（如 24MP → 384MP 输出，几百 MB 无人用）。
+MAX_OUT_EDGE = 8192
+
+
+class UpscaleInterrupted(Exception):
+    """分块推理被用户停止信号中断（v1.0.5：停止按钮可中断单张内部）。"""
+
+
+def adaptive_scale(w, h, max_edge=MAX_OUT_EDGE, max_scale=SCALE):
+    """纯函数：按输入尺寸算实际倍数 = min(4, 8192/max(w,h))。无 torch 依赖，可单测。"""
+    return min(float(max_scale), float(max_edge) / max(w, h))
+
+
+def scale_suffix(scale):
+    """输出文件名后缀，如 4 → '_4x'，1.37 → '_1x'（取整）。"""
+    return f'_{int(round(scale))}x'
+
+
+def tile_windows(h, w, tile_size=512, tile_overlap=16):
+    """纯函数：返回分块窗口 [(y0,y1,x0,x1), ...]，与 upscale_tensor 分块逻辑一致。"""
+    stride = tile_size - tile_overlap
+    wins = []
+    for y in range(0, h, stride):
+        for x in range(0, w, stride):
+            y1, x1 = min(y + tile_size, h), min(x + tile_size, w)
+            y0, x0 = max(y1 - tile_size, 0), max(x1 - tile_size, 0)
+            wins.append((y0, y1, x0, x1))
+    return wins
+
 # 期望的权重结构指纹（dual-launch-verification.md §4，2026-10-11 torch 实测）：
 # pytorch_model.pt：总参数 16.70M，body 共 23 个 RRDB block（body.0–body.22），
 # conv_first.weight 形状 (64, 3, 3, 3)。与官方 RealESRGAN_x4plus.pth 完全同构。
@@ -181,33 +210,46 @@ def _forward_tile(net, tile, device):
 
 @torch.no_grad()
 def upscale_tensor(net, img_t, device='cpu', tile_size=512, tile_overlap=16,
-                   auto_tile_threshold=768):
+                   auto_tile_threshold=768, progress_cb=None, stop_event=None):
     """超分单张 tensor（1,3,H,W，值域 0–1）→ (1,3,H*4,W*4).
 
     小图直接整图推理；任一边超过 auto_tile_threshold 时自动分块，
     每块裁掉 overlap 边缘后拼接（与 Real-ESRGAN 官方 tile 逻辑同思路，
     来源：realesrgan/utils/realesrganer.py 的 tile 处理，思想级引用）。
+
+    v1.0.5：progress_cb(done, total) 每块后回调；stop_event 置位时抛 UpscaleInterrupted。
     """
     _, _, h, w = img_t.shape
     if max(h, w) <= auto_tile_threshold:
-        return _forward_tile(net, img_t, device)
-    stride = tile_size - tile_overlap
+        if stop_event is not None and stop_event.is_set():
+            raise UpscaleInterrupted('用户停止')
+        out = _forward_tile(net, img_t, device)
+        if progress_cb is not None:
+            progress_cb(1, 1)
+        return out
+    wins = tile_windows(h, w, tile_size, tile_overlap)
+    total = len(wins)
     out = torch.zeros(1, 3, h * SCALE, w * SCALE)
-    for y in range(0, h, stride):
-        for x in range(0, w, stride):
-            y1, x1 = min(y + tile_size, h), min(x + tile_size, w)
-            y0, x0 = max(y1 - tile_size, 0), max(x1 - tile_size, 0)
-            tile = img_t[:, :, y0:y1, x0:x1]
-            sr = _forward_tile(net, tile, device)
-            # 输出坐标：输入块 [y0:y1) → 输出块 [y0*4:y1*4)，边缘块按实际尺寸对齐
-            oy0, ox0 = y0 * SCALE, x0 * SCALE
-            oy1, ox1 = y1 * SCALE, x1 * SCALE
-            out[:, :, oy0:oy1, ox0:ox1] = sr[:, :, :oy1 - oy0, :ox1 - ox0]
+    for done, (y0, y1, x0, x1) in enumerate(wins, 1):
+        if stop_event is not None and stop_event.is_set():
+            raise UpscaleInterrupted('用户停止')
+        tile = img_t[:, :, y0:y1, x0:x1]
+        sr = _forward_tile(net, tile, device)
+        # 输出坐标：输入块 [y0:y1) → 输出块 [y0*4:y1*4)，边缘块按实际尺寸对齐
+        oy0, ox0 = y0 * SCALE, x0 * SCALE
+        oy1, ox1 = y1 * SCALE, x1 * SCALE
+        out[:, :, oy0:oy1, ox0:ox1] = sr[:, :, :oy1 - oy0, :ox1 - ox0]
+        if progress_cb is not None:
+            progress_cb(done, total)
     return out
 
 
 class PhotoRestorer:
-    """生产版照片修复器：PIL 进 → PIL 出（RGB，4 倍）。"""
+    """生产版照片修复器：PIL 进 → PIL 出（RGB）。
+
+    v1.0.5 自适应倍数：模型始终跑 x4，再按 scale=min(4, 8192/max(w,h))
+    用 LANCZOS 缩到目标尺寸（输出长边封顶 8192）；实际倍数记在 self.last_scale。
+    """
 
     def __init__(self, weight_path=None, device=None, tile_size=512, tile_overlap=16):
         from PIL import Image  # 延迟导入：import 本模块不强制要求 PIL
@@ -222,18 +264,39 @@ class PhotoRestorer:
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
 
-    def upscale_image(self, img):
-        """输入 PIL.Image（任意模式）→ 返回 4 倍 PIL.Image（RGB）。"""
+    def upscale_image(self, img, progress_cb=None, stop_event=None):
+        """输入 PIL.Image（任意模式）→ 返回超分 PIL.Image（RGB）。
+
+        v1.0.5：progress_cb(done,total)/stop_event 透传给分块循环；
+        自适应倍数 scale=min(4, 8192/max(w,h))，输出长边封顶 8192。
+        """
         import numpy as np
         img = img.convert('RGB')
+        w, h = img.size
+        scale = adaptive_scale(w, h)
         arr = np.asarray(img).astype('float32') / 255.0
         t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0)
         sr = upscale_tensor(self.net, t, device=self.device,
-                            tile_size=self.tile_size, tile_overlap=self.tile_overlap)
+                            tile_size=self.tile_size, tile_overlap=self.tile_overlap,
+                            progress_cb=progress_cb, stop_event=stop_event)
         out = (sr.squeeze(0).permute(1, 2, 0).numpy() * 255.0).round().astype('uint8')
-        return self._Image.fromarray(out, 'RGB')
+        out_img = self._Image.fromarray(out, 'RGB')
+        tw, th = int(round(w * scale)), int(round(h * scale))
+        if (tw, th) != out_img.size:
+            out_img = out_img.resize((tw, th), self._Image.LANCZOS)
+        self.last_scale = scale
+        return out_img
 
-    def upscale_file(self, src_path, dst_path):
+    def upscale_file(self, src_path, dst_path=None, out_dir=None,
+                     progress_cb=None, stop_event=None):
+        """超分文件。dst_path 为 None 时按自适应倍数自动命名
+        （{base}_{n}x.png，n=取整后倍数），保存在 out_dir（默认源文件目录）。"""
         img = self._Image.open(src_path)
-        self.upscale_image(img).save(dst_path)
+        out_img = self.upscale_image(img, progress_cb=progress_cb, stop_event=stop_event)
+        if dst_path is None:
+            base = os.path.splitext(os.path.basename(src_path))[0]
+            suffix = scale_suffix(getattr(self, 'last_scale', SCALE))
+            dst_path = os.path.join(out_dir or os.path.dirname(src_path),
+                                    base + suffix + '.png')
+        out_img.save(dst_path)
         return dst_path

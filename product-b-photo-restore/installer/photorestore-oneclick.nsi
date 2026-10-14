@@ -12,7 +12,7 @@
 Unicode true
 
 !define PRODUCT_NAME "老片修复一键包"
-!define PRODUCT_VERSION "1.0.4"
+!define PRODUCT_VERSION "1.0.5"
 !define PRODUCT_PUBLISHER "开源改装铺"
 !define INSTALL_DIR_NAME "PhotoRestore"
 

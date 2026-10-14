@@ -272,21 +272,42 @@ class PhotoRestoreApp(tk.Tk):
         q = self.msg_q
         try:
             if mode == 'photo':
-                from core.rrdbnet_production import PhotoRestorer
+                from core.rrdbnet_production import PhotoRestorer, UpscaleInterrupted
+                # v1.0.5：照片模式也有 N 卡且达标时走 GPU（与视频分支同逻辑补装 torch）；
+                # 补装失败则回退 CPU（照片修复 CPU 可跑，不硬报错）。
+                from core.torch_setup import ensure_gpu_torch
+                _install_dir = _PKG_ROOT  # 安装根目录（含 core/gui/models/version.json）
+                action, tmsg = ensure_gpu_torch(_install_dir, sys.executable,
+                                                gpu_info=self.gpu_info)
+                q.put(('log', f'torch 环境检查：{tmsg}'))
+                use_cuda = action in ('ok', 'installed')
+                if not use_cuda and action == 'failed':
+                    q.put(('log', 'GPU 版 torch 补装失败，已回退 CPU 模式（照片修复不受影响）。'))
                 q.put(('log', '正在加载超分模型（64MB，约需数秒）…'))
-                restorer = PhotoRestorer()
-                q.put(('log', f'模型就绪（{restorer.n_params / 1e6:.1f}M 参数，设备 {restorer.device}）。'
-                              'CPU 上单张照片约需数秒到数十秒，请耐心等待。'))
+                restorer = PhotoRestorer(device='cuda' if use_cuda else 'cpu')
+                dev_note = 'GPU 加速' if use_cuda else 'CPU 模式（大图较慢，请耐心等待）'
+                q.put(('log', f'模型就绪（{restorer.n_params / 1e6:.1f}M 参数，'
+                              f'设备 {restorer.device}，{dev_note}）。'))
                 total = len(files)
                 for i, (p, _) in enumerate(files):
                     if self.stop_event.is_set():
                         break
                     q.put(('file_status', i, '处理中'))
                     q.put(('log', f'[{i + 1}/{total}] {os.path.basename(p)}'))
-                    base = os.path.splitext(os.path.basename(p))[0]
-                    dst = os.path.join(out_dir, base + '_4x.png')
-                    restorer.upscale_file(p, dst)
+
+                    def pcb(done, tot, _i=i, _t=total):  # noqa: B023
+                        frac = (_i + done / max(tot, 1)) / _t
+                        q.put(('progress', frac * 100, f'照片 {_i + 1}/{_t}：{done}/{tot} 块'))
+                    try:
+                        dst = restorer.upscale_file(p, out_dir=out_dir,
+                                                    progress_cb=pcb,
+                                                    stop_event=self.stop_event)
+                    except UpscaleInterrupted:
+                        q.put(('file_status', i, '已停止'))
+                        q.put(('log', f'[{i + 1}/{total}] {os.path.basename(p)} 已停止。'))
+                        break
                     q.put(('file_status', i, '完成'))
+                    q.put(('log', f'[{i + 1}/{total}] 输出：{os.path.basename(dst)}'))
                     q.put(('progress', (i + 1) / total * 100, f'[{i + 1}/{total}] 完成'))
             else:
                 from core.rrdbnet_production import PhotoRestorer
